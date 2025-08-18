@@ -1,123 +1,123 @@
-(() => {
-  if (window.__tm_katex_done) return;
-  window.__tm_katex_done = true;
-
-  // Utility functions for injecting CSS and JS
-  function injectCSS(href) {
-    const link = document.createElement('link');
-    link.rel = 'stylesheet';
-    link.href = href;
-    document.head.appendChild(link);
-  }
-
-  function injectJS(src, callback) {
-    const script = document.createElement('script');
-    script.src = src;
-    script.async = true;
-    script.onload = callback;
-    document.head.appendChild(script);
-  }
-
-  // Sanitize text nodes to prepare for rendering
-  function sanitizeTextNodes(root) {
-    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
-      acceptNode: function (node) {
-        const parent = node.parentNode;
-        if (!parent) return NodeFilter.FILTER_REJECT;
-
-        // Skip tags that should not be processed
-        const skipTags = /^(SCRIPT|STYLE|TEXTAREA|CODE|PRE|IFRAME)$/i;
-        if (skipTags.test(parent.tagName)) return NodeFilter.FILTER_REJECT;
-
-        // Skip empty or whitespace-only nodes
-        if (!node.nodeValue || !node.nodeValue.trim()) return NodeFilter.FILTER_REJECT;
-
-        return NodeFilter.FILTER_ACCEPT;
-      }
-    });
-
-    let node;
-    while ((node = walker.nextNode())) {
-      const originalValue = node.nodeValue;
-
-      // Ensure math delimiters are intact while escaping other unescaped $
-      const sanitizedValue = originalValue
-        .replace(/(?<!\$)\$(?!\$)/g, '\\$') // Escape single $ not part of a math delimiter
-        .replace(/(?<!\\)\$\$(?!\$)/g, '$$$$') // Ensure $$ is not escaped
-
-      if (sanitizedValue !== originalValue) node.nodeValue = sanitizedValue;
+// inline-latex-renderer.js
+(function() {
+    // Check if we're actually in TypingMind
+    if (typeof window === 'undefined' || !window.TypingMind) {
+        console.warn('TypingMind not detected, extension may not work properly');
+        return;
     }
-  }
 
-  // Main rendering function
-  function doRender() {
-    sanitizeTextNodes(document.body);
-
-    const DELIMITERS = [
-      { left: "\\[", right: "\\]", display: true },
-      { left: "$$", right: "$$", display: true },
-      { left: "\\(", right: "\\)", display: false },
-      { left: "$", right: "$", display: false }
-    ];
-    const IGNORED_TAGS = ['script', 'noscript', 'style', 'textarea', 'pre', 'code'];
-
-    if (window.renderMathInElement) {
-      try {
-        window.renderMathInElement(document.body, {
-          delimiters: DELIMITERS,
-          ignoredTags: IGNORED_TAGS
+    // Function to render LaTeX in text
+    function renderLatex(text) {
+        if (!text) return text;
+        
+        // First protect display math blocks from inline processing
+        const displayBlocks = [];
+        let protectedText = text.replace(/\$\$([\s\S]*?)\$\$/g, (match, math) => {
+            const placeholder = `__DISPLAY_MATH_${displayBlocks.length}__`;
+            displayBlocks.push(match);
+            return placeholder;
         });
-      } catch (e) {
-        console.warn('Math rendering failed:', e);
-      }
-      return;
+        
+        // Process inline math - handle both $...$ patterns
+        protectedText = protectedText.replace(/\$([^\$\n]+?)\$/g, (match, math) => {
+            // Skip if it's escaped
+            if (match.indexOf('\\$') === 0) return match;
+            
+            try {
+                // Return KaTeX-compatible HTML that TypingMind can render
+                return `<span class="katex-inline" data-latex="${math.replace(/"/g, '&quot;')}">\\(${math}\\)</span>`;
+            } catch (e) {
+                console.error('Failed to process inline math:', e);
+                return match;
+            }
+        });
+        
+        // Restore display blocks
+        displayBlocks.forEach((block, i) => {
+            protectedText = protectedText.replace(`__DISPLAY_MATH_${i}__`, block);
+        });
+        
+        return protectedText;
     }
 
-    // Injecting KaTeX styles and scripts for rendering
-    injectCSS('https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/katex.min.css');
-    injectJS('https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/katex.min.js', () => {
-      injectJS('https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/contrib/auto-render.min.js', () => {
-        try {
-          window.renderMathInElement(document.body, {
-            delimiters: DELIMITERS,
-            ignoredTags: IGNORED_TAGS
-          });
-        } catch (e) {
-          console.warn('KaTeX rendering failed:', e);
+    // Override message rendering
+    const originalRender = window.TypingMind?.renderMessage || window.renderMessage;
+    
+    if (originalRender) {
+        const newRender = function(message, ...args) {
+            if (message && message.content) {
+                message.content = renderLatex(message.content);
+            }
+            return originalRender.call(this, message, ...args);
+        };
+        
+        if (window.TypingMind?.renderMessage) {
+            window.TypingMind.renderMessage = newRender;
         }
-      });
-    });
-  }
-
-  // Initial render
-  doRender();
-
-  // Observe DOM mutations for dynamic content
-  let timer = null;
-  const observer = new MutationObserver((mutations) => {
-    let addedContent = false;
-    for (const mutation of mutations) {
-      if (mutation.addedNodes && mutation.addedNodes.length) {
-        addedContent = true;
-        break;
-      }
-      if (mutation.type === 'characterData') {
-        addedContent = true;
-        break;
-      }
+        if (window.renderMessage) {
+            window.renderMessage = newRender;
+        }
     }
-    if (!addedContent) return;
 
-    if (timer) clearTimeout(timer);
-    timer = setTimeout(() => {
-      doRender();
-      timer = null;
-    }, 160);
-  });
+    // Mutation observer to catch dynamically added content
+    const observer = new MutationObserver((mutations) => {
+        mutations.forEach((mutation) => {
+            mutation.addedNodes.forEach((node) => {
+                if (node.nodeType === 1 && node.classList?.contains('message-content')) {
+                    // Process any text nodes that might contain LaTeX
+                    const walker = document.createTreeWalker(
+                        node,
+                        NodeFilter.SHOW_TEXT,
+                        null,
+                        false
+                    );
+                    
+                    const textNodes = [];
+                    while (walker.nextNode()) {
+                        textNodes.push(walker.currentNode);
+                    }
+                    
+                    textNodes.forEach(textNode => {
+                        const text = textNode.textContent;
+                        if (text && text.includes('$')) {
+                            const span = document.createElement('span');
+                            span.innerHTML = renderLatex(text);
+                            textNode.parentNode.replaceChild(span, textNode);
+                            
+                            // Trigger KaTeX rendering if available
+                            if (window.renderMathInElement || window.katex) {
+                                const renderFunc = window.renderMathInElement || 
+                                    ((el) => {
+                                        el.querySelectorAll('.katex-inline').forEach(span => {
+                                            const latex = span.dataset.latex;
+                                            if (latex && window.katex) {
+                                                katex.render(latex, span, { throwOnError: false });
+                                            }
+                                        });
+                                    });
+                                renderFunc(span);
+                            }
+                        }
+                    });
+                }
+            });
+        });
+    });
 
-  observer.observe(document.documentElement || document.body, {
-    childList: true,
-    subtree: true,
-    characterData: true
-  });
+    // Start observing when DOM is ready
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', () => {
+            observer.observe(document.body, {
+                childList: true,
+                subtree: true
+            });
+        });
+    } else {
+        observer.observe(document.body, {
+            childList: true,
+            subtree: true
+        });
+    }
+
+    console.log('Inline LaTeX renderer extension loaded');
 })();
