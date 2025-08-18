@@ -1,105 +1,174 @@
 // inline-latex-renderer.js
 (function() {
-    console.log('[LaTeX Extension] Starting...');
+    console.log('[LaTeX Extension] Starting diagnostic version...');
     
-    // Load KaTeX
-    if (!window.katex) {
-        var css = document.createElement('link');
-        css.rel = 'stylesheet';
-        css.href = 'https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css';
-        document.head.appendChild(css);
+    // First, let's see what's actually on the page
+    setTimeout(function() {
+        console.log('[LaTeX Extension] Page analysis:');
         
-        var js = document.createElement('script');
-        js.src = 'https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js';
-        js.onload = init;
-        document.head.appendChild(js);
-    } else {
-        init();
-    }
+        // Check for math libraries
+        console.log('- window.katex exists?', !!window.katex);
+        console.log('- window.MathJax exists?', !!window.MathJax);
+        console.log('- window.renderMathInElement exists?', !!window.renderMathInElement);
+        
+        // Find elements with dollar signs
+        var allElements = document.querySelectorAll('p, li, span, div');
+        var elementsWithDollars = [];
+        
+        for (var i = 0; i < allElements.length; i++) {
+            if (allElements[i].textContent && allElements[i].textContent.indexOf('$') !== -1) {
+                elementsWithDollars.push(allElements[i]);
+            }
+        }
+        
+        console.log('- Found ' + elementsWithDollars.length + ' elements with $ signs');
+        
+        if (elementsWithDollars.length > 0) {
+            console.log('- First element with $:', elementsWithDollars[0]);
+            console.log('- Its HTML:', elementsWithDollars[0].innerHTML);
+            console.log('- Its text:', elementsWithDollars[0].textContent);
+        }
+        
+        // Now let's try different rendering approaches
+        if (elementsWithDollars.length > 0) {
+            var testEl = elementsWithDollars[0];
+            var text = testEl.textContent;
+            
+            // Extract first math expression
+            var start = text.indexOf('$');
+            var end = text.indexOf('$', start + 1);
+            
+            if (start !== -1 && end !== -1) {
+                var mathContent = text.substring(start + 1, end);
+                console.log('- Extracted math:', mathContent);
+                
+                // Try rendering with different methods
+                if (window.katex) {
+                    try {
+                        var testDiv = document.createElement('div');
+                        window.katex.render(mathContent, testDiv);
+                        console.log('- KaTeX render successful!');
+                        console.log('- Rendered HTML:', testDiv.innerHTML);
+                    } catch (e) {
+                        console.log('- KaTeX render failed:', e.message);
+                    }
+                }
+                
+                if (window.MathJax) {
+                    console.log('- MathJax available, config:', window.MathJax.config);
+                }
+            }
+        }
+        
+        // Check what TypingMind is doing
+        console.log('- Checking for TypingMind rendering...');
+        var renderedMath = document.querySelectorAll('.katex, .MathJax, mjx-container, .math');
+        console.log('- Found ' + renderedMath.length + ' already-rendered math elements');
+        if (renderedMath.length > 0) {
+            console.log('- Example rendered element:', renderedMath[0]);
+        }
+        
+    }, 2000); // Wait 2 seconds for page to fully load
     
-    function init() {
-        console.log('[LaTeX Extension] KaTeX ready');
+    // Now the actual fix - try multiple approaches
+    function tryFix() {
+        console.log('[LaTeX Extension] Attempting fix...');
         
-        // Process function
-        function processPage() {
-            var elements = document.querySelectorAll('p, li, span, div');
+        // Approach 1: If MathJax exists, configure and use it
+        if (window.MathJax && window.MathJax.startup) {
+            console.log('[LaTeX Extension] Configuring MathJax for inline math...');
+            
+            window.MathJax.config.tex.inlineMath = [['$', '$']];
+            window.MathJax.startup.document.clear();
+            window.MathJax.startup.document.updateDocument();
+            
+            if (window.MathJax.typesetPromise) {
+                window.MathJax.typesetPromise().then(function() {
+                    console.log('[LaTeX Extension] MathJax typeset complete');
+                }).catch(function(e) {
+                    console.log('[LaTeX Extension] MathJax error:', e);
+                });
+            }
+        }
+        
+        // Approach 2: If KaTeX exists, manually render
+        if (window.katex) {
+            console.log('[LaTeX Extension] Using KaTeX...');
+            
+            var elements = document.querySelectorAll('p, li');
+            var processed = 0;
             
             for (var i = 0; i < elements.length; i++) {
                 var el = elements[i];
+                if (el.getAttribute('data-latex-done')) continue;
                 
-                // Skip if already processed
-                if (el.getAttribute('data-latex-processed')) continue;
+                var text = el.textContent;
+                if (!text || text.indexOf('$') === -1) continue;
                 
-                // Check for dollar signs in text
-                if (el.childNodes.length === 1 && el.childNodes[0].nodeType === 3) {
-                    var text = el.childNodes[0].nodeValue;
-                    if (text && text.indexOf('$') !== -1) {
-                        processText(el, text);
-                    }
-                }
-            }
-        }
-        
-        function processText(element, text) {
-            console.log('[LaTeX Extension] Processing:', text.substring(0, 50));
-            
-            var html = '';
-            var pos = 0;
-            var start = text.indexOf('$', pos);
-            
-            while (start !== -1) {
-                // Add text before $
-                if (start > pos) {
-                    html += escapeHtml(text.substring(pos, start));
-                }
+                // Parse and render
+                var newHTML = '';
+                var lastEnd = 0;
                 
-                // Find closing $
-                var end = text.indexOf('$', start + 1);
-                if (end === -1) break;
-                
-                // Extract math
-                var math = text.substring(start + 1, end);
-                console.log('[LaTeX Extension] Rendering math:', math);
-                
-                // Render with KaTeX
-                try {
+                while (true) {
+                    var start = text.indexOf('$', lastEnd);
+                    if (start === -1) break;
+                    
+                    var end = text.indexOf('$', start + 1);
+                    if (end === -1) break;
+                    
+                    // Add text before math
+                    newHTML += text.substring(lastEnd, start);
+                    
+                    // Render math
+                    var math = text.substring(start + 1, end);
                     var span = document.createElement('span');
-                    katex.render(math, span, {
-                        throwOnError: false,
-                        displayMode: false
-                    });
-                    html += span.innerHTML;
-                } catch (e) {
-                    console.error('[LaTeX Extension] KaTeX error:', e);
-                    html += '$' + escapeHtml(math) + '$';
+                    
+                    try {
+                        katex.render(math, span, {throwOnError: false});
+                        newHTML += span.innerHTML;
+                        processed++;
+                    } catch (e) {
+                        newHTML += '$' + math + '$';
+                    }
+                    
+                    lastEnd = end + 1;
                 }
                 
-                pos = end + 1;
-                start = text.indexOf('$', pos);
+                // Add remaining text
+                newHTML += text.substring(lastEnd);
+                
+                if (lastEnd > 0) {
+                    el.innerHTML = newHTML;
+                    el.setAttribute('data-latex-done', 'true');
+                }
             }
             
-            // Add remaining text
-            if (pos < text.length) {
-                html += escapeHtml(text.substring(pos));
-            }
+            console.log('[LaTeX Extension] Processed ' + processed + ' math expressions');
+        }
+        
+        // Approach 3: Load our own KaTeX if needed
+        if (!window.katex && !window.MathJax) {
+            console.log('[LaTeX Extension] No math library found, loading KaTeX...');
             
-            // Update element
-            element.innerHTML = html;
-            element.setAttribute('data-latex-processed', 'true');
+            var link = document.createElement('link');
+            link.rel = 'stylesheet';
+            link.href = 'https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css';
+            document.head.appendChild(link);
+            
+            var script = document.createElement('script');
+            script.src = 'https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js';
+            script.onload = function() {
+                console.log('[LaTeX Extension] KaTeX loaded, retrying...');
+                setTimeout(tryFix, 100);
+            };
+            document.head.appendChild(script);
         }
-        
-        function escapeHtml(text) {
-            var div = document.createElement('div');
-            div.textContent = text;
-            return div.innerHTML;
-        }
-        
-        // Run immediately
-        processPage();
-        
-        // Run periodically
-        setInterval(processPage, 1000);
-        
-        console.log('[LaTeX Extension] Running');
     }
+    
+    // Run fix after delay
+    setTimeout(tryFix, 3000);
+    
+    // Also run on interval
+    setInterval(tryFix, 5000);
+    
 })();
