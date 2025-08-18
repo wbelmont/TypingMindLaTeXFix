@@ -1,120 +1,188 @@
 // inline-latex-renderer.js
 (function() {
-    console.log('[LaTeX Extension] Loading...');
+    console.log('[LaTeX Extension] Initializing...');
     
-    // More aggressive approach - directly modify DOM after it changes
-    function processLatexInElement(element) {
-        if (!element) return;
+    // Function to load KaTeX if not already present
+    function ensureKaTeX(callback) {
+        if (window.katex) {
+            callback();
+            return;
+        }
         
-        // Find all text nodes
+        console.log('[LaTeX Extension] KaTeX not found, loading...');
+        
+        // Load KaTeX CSS
+        const link = document.createElement('link');
+        link.rel = 'stylesheet';
+        link.href = 'https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css';
+        document.head.appendChild(link);
+        
+        // Load KaTeX JS
+        const script = document.createElement('script');
+        script.src = 'https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js';
+        script.onload = () => {
+            console.log('[LaTeX Extension] KaTeX loaded');
+            callback();
+        };
+        document.head.appendChild(script);
+    }
+    
+    // Function to render LaTeX in an element
+    function renderLatexInElement(element) {
+        if (!element || !window.katex) return;
+        
+        // Get all text nodes
         const walker = document.createTreeWalker(
             element,
             NodeFilter.SHOW_TEXT,
             {
-                acceptNode: function(node) {
-                    // Skip if already processed or in a script/style tag
-                    if (node.parentElement?.classList?.contains('katex') ||
-                        node.parentElement?.tagName === 'SCRIPT' ||
-                        node.parentElement?.tagName === 'STYLE') {
+                acceptNode: (node) => {
+                    // Skip if already processed
+                    if (node.parentElement?.classList?.contains('katex')) {
                         return NodeFilter.FILTER_REJECT;
                     }
-                    return node.textContent.includes('$') ? 
+                    // Only accept if contains dollar signs
+                    return node.textContent?.includes('$') ? 
                         NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
                 }
             }
         );
         
-        const nodesToProcess = [];
+        const textNodes = [];
         while (walker.nextNode()) {
-            nodesToProcess.push(walker.currentNode);
+            textNodes.push(walker.currentNode);
         }
         
-        nodesToProcess.forEach(node => {
+        textNodes.forEach(node => {
             const text = node.textContent;
+            if (!text || !text.includes('$')) return;
             
-            // Check if this actually has LaTeX
-            if (!text.match(/\$[^$]+\$/)) return;
+            // Split text by $ delimiters and process
+            const parts = [];
+            let currentPos = 0;
+            let inMath = false;
             
-            // Create a container for the processed content
-            const container = document.createElement('span');
-            let processedHtml = text;
+            for (let i = 0; i < text.length; i++) {
+                if (text[i] === '$') {
+                    // Check if it's escaped
+                    if (i > 0 && text[i-1] === '\\') continue;
+                    
+                    // Check for display math $$
+                    if (i + 1 < text.length && text[i+1] === '$') {
+                        // Skip display math
+                        continue;
+                    }
+                    
+                    if (!inMath) {
+                        // Starting math mode
+                        if (i > currentPos) {
+                            parts.push({type: 'text', content: text.slice(currentPos, i)});
+                        }
+                        currentPos = i + 1;
+                        inMath = true;
+                    } else {
+                        // Ending math mode
+                        const mathContent = text.slice(currentPos, i);
+                        parts.push({type: 'math', content: mathContent});
+                        currentPos = i + 1;
+                        inMath = false;
+                    }
+                }
+            }
             
-            // Replace inline math $...$ with KaTeX rendered version
-            processedHtml = processedHtml.replace(/\$([^$]+)\$/g, (match, latex) => {
-                console.log('[LaTeX Extension] Found inline math:', latex);
-                
-                // Try multiple approaches
-                if (window.katex) {
+            // Add remaining text
+            if (currentPos < text.length) {
+                parts.push({type: 'text', content: text.slice(currentPos)});
+            }
+            
+            // Only process if we found math
+            if (!parts.some(p => p.type === 'math')) return;
+            
+            console.log('[LaTeX Extension] Processing node with parts:', parts);
+            
+            // Create replacement span
+            const span = document.createElement('span');
+            span.className = 'latex-processed';
+            
+            parts.forEach(part => {
+                if (part.type === 'text') {
+                    span.appendChild(document.createTextNode(part.content));
+                } else if (part.type === 'math') {
+                    const mathSpan = document.createElement('span');
                     try {
-                        return window.katex.renderToString(latex, {
+                        katex.render(part.content, mathSpan, {
                             throwOnError: false,
                             displayMode: false
                         });
-                    } catch(e) {
+                        console.log('[LaTeX Extension] Rendered:', part.content);
+                    } catch (e) {
                         console.error('[LaTeX Extension] KaTeX error:', e);
+                        mathSpan.textContent = `$${part.content}$`;
                     }
+                    span.appendChild(mathSpan);
                 }
-                
-                // Fallback to MathJax-style delimiters
-                return `\\(${latex}\\)`;
             });
             
-            container.innerHTML = processedHtml;
-            node.parentNode.replaceChild(container, node);
-            
-            // Try to trigger re-rendering
-            if (window.MathJax?.typesetPromise) {
-                window.MathJax.typesetPromise([container]).catch(console.error);
-            } else if (window.renderMathInElement) {
-                window.renderMathInElement(container, {
-                    delimiters: [
-                        {left: '\\(', right: '\\)', display: false},
-                        {left: '$', right: '$', display: false}
-                    ]
-                });
+            // Replace the text node
+            node.parentNode.replaceChild(span, node);
+        });
+    }
+    
+    // Process all messages
+    function processAllMessages() {
+        const messages = document.querySelectorAll('p, li, div[class*="message"], div[class*="content"]');
+        console.log(`[LaTeX Extension] Processing ${messages.length} potential message elements`);
+        
+        messages.forEach(msg => {
+            if (!msg.classList.contains('latex-processed') && msg.textContent?.includes('$')) {
+                renderLatexInElement(msg);
+                msg.classList.add('latex-checked');
             }
         });
     }
     
-    // Watch for ANY changes
+    // Watch for new content
     const observer = new MutationObserver((mutations) => {
+        let shouldProcess = false;
+        
         mutations.forEach(mutation => {
             mutation.addedNodes.forEach(node => {
                 if (node.nodeType === Node.ELEMENT_NODE) {
-                    // Check if this is a message or contains messages
-                    if (node.classList?.contains('message') || 
-                        node.querySelector?.('.message') ||
-                        node.textContent?.includes('$')) {
-                        
-                        setTimeout(() => {
-                            processLatexInElement(node);
-                        }, 100); // Small delay to let TypingMind finish its processing
+                    const text = node.textContent || '';
+                    if (text.includes('$') || node.tagName === 'P' || node.tagName === 'LI') {
+                        shouldProcess = true;
                     }
                 }
             });
         });
+        
+        if (shouldProcess) {
+            // Debounce processing
+            clearTimeout(window.latexProcessTimeout);
+            window.latexProcessTimeout = setTimeout(() => {
+                ensureKaTeX(() => processAllMessages());
+            }, 200);
+        }
     });
     
-    // Start observing immediately
-    observer.observe(document.body, {
-        childList: true,
-        subtree: true,
-        characterData: true
-    });
-    
-    // Also process existing content
-    setTimeout(() => {
-        document.querySelectorAll('.message, [class*="message"], [class*="content"]').forEach(el => {
-            processLatexInElement(el);
+    // Initialize
+    ensureKaTeX(() => {
+        // Process existing content
+        processAllMessages();
+        
+        // Start observing
+        observer.observe(document.body, {
+            childList: true,
+            subtree: true
         });
-    }, 1000);
-    
-    // Log what math libraries are available
-    console.log('[LaTeX Extension] Available libraries:', {
-        katex: typeof window.katex !== 'undefined',
-        MathJax: typeof window.MathJax !== 'undefined',
-        renderMathInElement: typeof window.renderMathInElement !== 'undefined'
+        
+        console.log('[LaTeX Extension] Ready and watching for changes');
     });
     
-    console.log('[LaTeX Extension] Loaded successfully');
+    // Also process on window load just in case
+    window.addEventListener('load', () => {
+        setTimeout(() => {
+            ensureKaTeX(() => processAllMessages());
+        }, 1000);
+    });
 })();
