@@ -36,26 +36,30 @@
             element,
             NodeFilter.SHOW_TEXT,
             {
-                acceptNode: (node) => {
+                acceptNode: function(node) {
                     // Skip if already processed
-                    if (node.parentElement?.classList?.contains('katex')) {
+                    if (node.parentElement && node.parentElement.classList && 
+                        node.parentElement.classList.contains('katex')) {
                         return NodeFilter.FILTER_REJECT;
                     }
                     // Only accept if contains dollar signs
-                    return node.textContent?.includes('$') ? 
-                        NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
+                    if (node.textContent && node.textContent.indexOf('$') !== -1) {
+                        return NodeFilter.FILTER_ACCEPT;
+                    }
+                    return NodeFilter.FILTER_REJECT;
                 }
             }
         );
         
         const textNodes = [];
-        while (walker.nextNode()) {
-            textNodes.push(walker.currentNode);
+        let node;
+        while (node = walker.nextNode()) {
+            textNodes.push(node);
         }
         
-        textNodes.forEach(node => {
+        textNodes.forEach(function(node) {
             const text = node.textContent;
-            if (!text || !text.includes('$')) return;
+            if (!text || text.indexOf('$') === -1) return;
             
             // Split text by $ delimiters and process
             const parts = [];
@@ -96,7 +100,8 @@
             }
             
             // Only process if we found math
-            if (!parts.some(p => p.type === 'math')) return;
+            const hasMath = parts.some(function(p) { return p.type === 'math'; });
+            if (!hasMath) return;
             
             console.log('[LaTeX Extension] Processing node with parts:', parts);
             
@@ -104,7 +109,7 @@
             const span = document.createElement('span');
             span.className = 'latex-processed';
             
-            parts.forEach(part => {
+            parts.forEach(function(part) {
                 if (part.type === 'text') {
                     span.appendChild(document.createTextNode(part.content));
                 } else if (part.type === 'math') {
@@ -117,7 +122,7 @@
                         console.log('[LaTeX Extension] Rendered:', part.content);
                     } catch (e) {
                         console.error('[LaTeX Extension] KaTeX error:', e);
-                        mathSpan.textContent = `$${part.content}$`;
+                        mathSpan.textContent = '$' + part.content + '$';
                     }
                     span.appendChild(mathSpan);
                 }
@@ -130,11 +135,15 @@
     
     // Process all messages
     function processAllMessages() {
-        const messages = document.querySelectorAll('p, li, div[class*="message"], div[class*="content"]');
-        console.log(`[LaTeX Extension] Processing ${messages.length} potential message elements`);
+        const selectors = 'p, li, div[class*="message"], div[class*="content"]';
+        const messages = document.querySelectorAll(selectors);
+        console.log('[LaTeX Extension] Processing ' + messages.length + ' potential message elements');
         
-        messages.forEach(msg => {
-            if (!msg.classList.contains('latex-processed') && msg.textContent?.includes('$')) {
+        messages.forEach(function(msg) {
+            const hasLatex = msg.textContent && msg.textContent.indexOf('$') !== -1;
+            const notProcessed = !msg.classList.contains('latex-checked');
+            
+            if (notProcessed && hasLatex) {
                 renderLatexInElement(msg);
                 msg.classList.add('latex-checked');
             }
@@ -142,14 +151,14 @@
     }
     
     // Watch for new content
-    const observer = new MutationObserver((mutations) => {
+    const observer = new MutationObserver(function(mutations) {
         let shouldProcess = false;
         
-        mutations.forEach(mutation => {
-            mutation.addedNodes.forEach(node => {
+        mutations.forEach(function(mutation) {
+            mutation.addedNodes.forEach(function(node) {
                 if (node.nodeType === Node.ELEMENT_NODE) {
                     const text = node.textContent || '';
-                    if (text.includes('$') || node.tagName === 'P' || node.tagName === 'LI') {
+                    if (text.indexOf('$') !== -1 || node.tagName === 'P' || node.tagName === 'LI') {
                         shouldProcess = true;
                     }
                 }
@@ -159,14 +168,14 @@
         if (shouldProcess) {
             // Debounce processing
             clearTimeout(window.latexProcessTimeout);
-            window.latexProcessTimeout = setTimeout(() => {
-                ensureKaTeX(() => processAllMessages());
+            window.latexProcessTimeout = setTimeout(function() {
+                ensureKaTeX(function() { processAllMessages(); });
             }, 200);
         }
     });
     
     // Initialize
-    ensureKaTeX(() => {
+    ensureKaTeX(function() {
         // Process existing content
         processAllMessages();
         
@@ -180,9 +189,9 @@
     });
     
     // Also process on window load just in case
-    window.addEventListener('load', () => {
-        setTimeout(() => {
-            ensureKaTeX(() => processAllMessages());
+    window.addEventListener('load', function() {
+        setTimeout(function() {
+            ensureKaTeX(function() { processAllMessages(); });
         }, 1000);
     });
 })();
