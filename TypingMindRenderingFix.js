@@ -1,68 +1,121 @@
 (() => {
-if (window.__tm_katex_done) return;
-window.__tm_katex_done = true;
+  if (window.__tm_katex_done) return;
+  window.__tm_katex_done = true;
 
-function injectCSS(h){ const l=document.createElement('link'); l.rel='stylesheet'; l.href=h; document.head.appendChild(l); }
-function injectJS(h, cb){ const s=document.createElement('script'); s.src=h; s.async=true; s.onload=cb; document.head.appendChild(s); }
+  // Utility functions for injecting CSS and JS
+  function injectCSS(href) {
+    const link = document.createElement('link');
+    link.rel = 'stylesheet';
+    link.href = href;
+    document.head.appendChild(link);
+  }
 
-function sanitizeTextNodes(root){
-const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
-acceptNode: function(node){
-const p=node.parentNode;
-if(!p) return NodeFilter.FILTER_REJECT;
-const skip = /^(SCRIPT|STYLE|TEXTAREA|CODE|PRE|IFRAME)$/i;
-if(skip.test(p.tagName)) return NodeFilter.FILTER_REJECT;
-if(!node.nodeValue || !node.nodeValue.trim()) return NodeFilter.FILTER_REJECT;
-return NodeFilter.FILTER_ACCEPT;
-}
-});
-let n;
-while(n=walker.nextNode()){
-let s=n.nodeValue;
-const ns = s
-.replace(/\$/g, '$') // $ -> $
-.replace(/\$$[A-Za-z])/g, '\$1')// \x -> \x
-.replace(/&#36;|$/g, '$'); // HTML-escaped $
-if(ns !== s) n.nodeValue = ns;
-}
-}
+  function injectJS(src, callback) {
+    const script = document.createElement('script');
+    script.src = src;
+    script.async = true;
+    script.onload = callback;
+    document.head.appendChild(script);
+  }
 
-function doRender(){
-sanitizeTextNodes(document.body);
-const DELIMS = [
-  {left: "\\[", right: "\\]", display: true},
-  {left: "$$", right: "$$", display: true},
-  {left: "\\(", right: "\\)", display: false},
-  {left: "$", right: "$", display: false}
-];
-const IGNORE = ['script','noscript','style','textarea','pre','code'];
+  // Sanitize text nodes to prepare for rendering
+  function sanitizeTextNodes(root) {
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+      acceptNode: function (node) {
+        const parent = node.parentNode;
+        if (!parent) return NodeFilter.FILTER_REJECT;
 
-if(window.renderMathInElement){
-  try{ window.renderMathInElement(document.body, {delimiters: DELIMS, ignoredTags: IGNORE}); }catch(e){console.warn(e);}
-  return;
-}
+        // Skip tags that should not be processed
+        const skipTags = /^(SCRIPT|STYLE|TEXTAREA|CODE|PRE|IFRAME)$/i;
+        if (skipTags.test(parent.tagName)) return NodeFilter.FILTER_REJECT;
 
-injectCSS('https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/katex.min.css');
-injectJS('https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/katex.min.js', () => {
-  injectJS('https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/contrib/auto-render.min.js', () => {
-    try{ window.renderMathInElement(document.body, {delimiters: DELIMS, ignoredTags: IGNORE}); }
-    catch(e){ console.warn('katex render failed', e); }
+        // Skip empty or whitespace-only nodes
+        if (!node.nodeValue || !node.nodeValue.trim()) return NodeFilter.FILTER_REJECT;
+
+        return NodeFilter.FILTER_ACCEPT;
+      }
+    });
+
+    let node;
+    while ((node = walker.nextNode())) {
+      let originalValue = node.nodeValue;
+      const sanitizedValue = originalValue
+        .replace(/\$/g, '$') // $ -> $
+        .replace(/\$$[A-Za-z])/g, '\$1') // \x -> \x
+        .replace(/&#36;|$/g, '$'); // HTML-escaped $
+      if (sanitizedValue !== originalValue) node.nodeValue = sanitizedValue;
+    }
+  }
+
+  // Main rendering function
+  function doRender() {
+    sanitizeTextNodes(document.body);
+
+    const DELIMITERS = [
+      { left: "\\[", right: "\\]", display: true },
+      { left: "$$", right: "$$", display: true },
+      { left: "\\(", right: "\\)", display: false },
+      { left: "$", right: "$", display: false }
+    ];
+    const IGNORED_TAGS = ['script', 'noscript', 'style', 'textarea', 'pre', 'code'];
+
+    if (window.renderMathInElement) {
+      try {
+        window.renderMathInElement(document.body, {
+          delimiters: DELIMITERS,
+          ignoredTags: IGNORED_TAGS
+        });
+      } catch (e) {
+        console.warn('Math rendering failed:', e);
+      }
+      return;
+    }
+
+    // Injecting KaTeX styles and scripts for rendering
+    injectCSS('https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/katex.min.css');
+    injectJS('https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/katex.min.js', () => {
+      injectJS('https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/contrib/auto-render.min.js', () => {
+        try {
+          window.renderMathInElement(document.body, {
+            delimiters: DELIMITERS,
+            ignoredTags: IGNORED_TAGS
+          });
+        } catch (e) {
+          console.warn('KaTeX rendering failed:', e);
+        }
+      });
+    });
+  }
+
+  // Initial render
+  doRender();
+
+  // Observe DOM mutations for dynamic content
+  let timer = null;
+  const observer = new MutationObserver((mutations) => {
+    let addedContent = false;
+    for (const mutation of mutations) {
+      if (mutation.addedNodes && mutation.addedNodes.length) {
+        addedContent = true;
+        break;
+      }
+      if (mutation.type === 'characterData') {
+        addedContent = true;
+        break;
+      }
+    }
+    if (!addedContent) return;
+
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(() => {
+      doRender();
+      timer = null;
+    }, 160);
   });
-});
-}
 
-doRender();
-
-let timer = null;
-const obs = new MutationObserver((mutations) => {
-let added=false;
-for(const m of mutations){
-if(m.addedNodes && m.addedNodes.length){ added=true; break; }
-if(m.type==='characterData'){ added=true; break; }
-}
-if(!added) return;
-if(timer) clearTimeout(timer);
-timer = setTimeout(()=>{ doRender(); timer=null; }, 160);
-});
-obs.observe(document.documentElement||document.body, {childList:true, subtree:true, characterData:true});
+  observer.observe(document.documentElement || document.body, {
+    childList: true,
+    subtree: true,
+    characterData: true
+  });
 })();
