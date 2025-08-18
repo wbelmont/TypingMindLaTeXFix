@@ -38,12 +38,12 @@
 
     let node;
     while ((node = walker.nextNode())) {
-      let originalValue = node.nodeValue;
+      const originalValue = node.nodeValue;
 
-      // Sanitize the text for math rendering
+      // Ensure math delimiters are intact while escaping other unescaped $
       const sanitizedValue = originalValue
-        .replace(/(?<!\\)\$/g, '\\$') // Escape $ that are not already escaped
-        .replace(/\\\$/g, '$'); // Unescape already escaped $ for KaTeX rendering
+        .replace(/(?<!\$)\$(?!\$)/g, '\\$') // Escape single $ not part of a math delimiter
+        .replace(/(?<!\\)\$\$(?!\$)/g, '$$$$') // Ensure $$ is not escaped
 
       if (sanitizedValue !== originalValue) node.nodeValue = sanitizedValue;
     }
