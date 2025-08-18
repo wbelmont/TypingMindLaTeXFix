@@ -39,10 +39,12 @@
     let node;
     while ((node = walker.nextNode())) {
       let originalValue = node.nodeValue;
+
+      // Sanitize the text for math rendering
       const sanitizedValue = originalValue
-        .replace(/\$/g, '$') // $ -> $
-        .replace(/\$$[A-Za-z])/g, '\$1') // \x -> \x
-        .replace(/&#36;|$/g, '$'); // HTML-escaped $
+        .replace(/(?<!\\)\$/g, '\\$') // Escape $ that are not already escaped
+        .replace(/\\\$/g, '$'); // Unescape already escaped $ for KaTeX rendering
+
       if (sanitizedValue !== originalValue) node.nodeValue = sanitizedValue;
     }
   }
