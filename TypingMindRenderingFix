@@ -30,23 +30,10 @@ if(ns !== s) n.nodeValue = ns;
 function doRender(){
 sanitizeTextNodes(document.body);
 const DELIMS = [
-{left: '
-′
-,
-r
-i
-g
-h
-t
-:
-′
-′
- ,right: 
-′
- ', display: true},
-{left: '$$', right: '$$', display: true},
-{left: '\(', right: '$$', display: false},
-{left: '$', right: '$', display: false}
+  {left: "\\[", right: "\\]", display: true},
+  {left: "$$", right: "$$", display: true},
+  {left: "\\(", right: "\\)", display: false},
+  {left: "$", right: "$", display: false}
 ];
 const IGNORE = ['script','noscript','style','textarea','pre','code'];
 
