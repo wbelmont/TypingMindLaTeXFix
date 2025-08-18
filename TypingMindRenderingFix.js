@@ -1,123 +1,120 @@
 // inline-latex-renderer.js
 (function() {
-    // Check if we're actually in TypingMind
-    if (typeof window === 'undefined' || !window.TypingMind) {
-        console.warn('TypingMind not detected, extension may not work properly');
-        return;
-    }
-
-    // Function to render LaTeX in text
-    function renderLatex(text) {
-        if (!text) return text;
-        
-        // First protect display math blocks from inline processing
-        const displayBlocks = [];
-        let protectedText = text.replace(/\$\$([\s\S]*?)\$\$/g, (match, math) => {
-            const placeholder = `__DISPLAY_MATH_${displayBlocks.length}__`;
-            displayBlocks.push(match);
-            return placeholder;
-        });
-        
-        // Process inline math - handle both $...$ patterns
-        protectedText = protectedText.replace(/\$([^\$\n]+?)\$/g, (match, math) => {
-            // Skip if it's escaped
-            if (match.indexOf('\\$') === 0) return match;
-            
-            try {
-                // Return KaTeX-compatible HTML that TypingMind can render
-                return `<span class="katex-inline" data-latex="${math.replace(/"/g, '&quot;')}">\\(${math}\\)</span>`;
-            } catch (e) {
-                console.error('Failed to process inline math:', e);
-                return match;
-            }
-        });
-        
-        // Restore display blocks
-        displayBlocks.forEach((block, i) => {
-            protectedText = protectedText.replace(`__DISPLAY_MATH_${i}__`, block);
-        });
-        
-        return protectedText;
-    }
-
-    // Override message rendering
-    const originalRender = window.TypingMind?.renderMessage || window.renderMessage;
+    console.log('[LaTeX Extension] Loading...');
     
-    if (originalRender) {
-        const newRender = function(message, ...args) {
-            if (message && message.content) {
-                message.content = renderLatex(message.content);
-            }
-            return originalRender.call(this, message, ...args);
-        };
+    // More aggressive approach - directly modify DOM after it changes
+    function processLatexInElement(element) {
+        if (!element) return;
         
-        if (window.TypingMind?.renderMessage) {
-            window.TypingMind.renderMessage = newRender;
-        }
-        if (window.renderMessage) {
-            window.renderMessage = newRender;
-        }
-    }
-
-    // Mutation observer to catch dynamically added content
-    const observer = new MutationObserver((mutations) => {
-        mutations.forEach((mutation) => {
-            mutation.addedNodes.forEach((node) => {
-                if (node.nodeType === 1 && node.classList?.contains('message-content')) {
-                    // Process any text nodes that might contain LaTeX
-                    const walker = document.createTreeWalker(
-                        node,
-                        NodeFilter.SHOW_TEXT,
-                        null,
-                        false
-                    );
-                    
-                    const textNodes = [];
-                    while (walker.nextNode()) {
-                        textNodes.push(walker.currentNode);
+        // Find all text nodes
+        const walker = document.createTreeWalker(
+            element,
+            NodeFilter.SHOW_TEXT,
+            {
+                acceptNode: function(node) {
+                    // Skip if already processed or in a script/style tag
+                    if (node.parentElement?.classList?.contains('katex') ||
+                        node.parentElement?.tagName === 'SCRIPT' ||
+                        node.parentElement?.tagName === 'STYLE') {
+                        return NodeFilter.FILTER_REJECT;
                     }
-                    
-                    textNodes.forEach(textNode => {
-                        const text = textNode.textContent;
-                        if (text && text.includes('$')) {
-                            const span = document.createElement('span');
-                            span.innerHTML = renderLatex(text);
-                            textNode.parentNode.replaceChild(span, textNode);
-                            
-                            // Trigger KaTeX rendering if available
-                            if (window.renderMathInElement || window.katex) {
-                                const renderFunc = window.renderMathInElement || 
-                                    ((el) => {
-                                        el.querySelectorAll('.katex-inline').forEach(span => {
-                                            const latex = span.dataset.latex;
-                                            if (latex && window.katex) {
-                                                katex.render(latex, span, { throwOnError: false });
-                                            }
-                                        });
-                                    });
-                                renderFunc(span);
-                            }
-                        }
-                    });
+                    return node.textContent.includes('$') ? 
+                        NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT;
+                }
+            }
+        );
+        
+        const nodesToProcess = [];
+        while (walker.nextNode()) {
+            nodesToProcess.push(walker.currentNode);
+        }
+        
+        nodesToProcess.forEach(node => {
+            const text = node.textContent;
+            
+            // Check if this actually has LaTeX
+            if (!text.match(/\$[^$]+\$/)) return;
+            
+            // Create a container for the processed content
+            const container = document.createElement('span');
+            let processedHtml = text;
+            
+            // Replace inline math $...$ with KaTeX rendered version
+            processedHtml = processedHtml.replace(/\$([^$]+)\$/g, (match, latex) => {
+                console.log('[LaTeX Extension] Found inline math:', latex);
+                
+                // Try multiple approaches
+                if (window.katex) {
+                    try {
+                        return window.katex.renderToString(latex, {
+                            throwOnError: false,
+                            displayMode: false
+                        });
+                    } catch(e) {
+                        console.error('[LaTeX Extension] KaTeX error:', e);
+                    }
+                }
+                
+                // Fallback to MathJax-style delimiters
+                return `\\(${latex}\\)`;
+            });
+            
+            container.innerHTML = processedHtml;
+            node.parentNode.replaceChild(container, node);
+            
+            // Try to trigger re-rendering
+            if (window.MathJax?.typesetPromise) {
+                window.MathJax.typesetPromise([container]).catch(console.error);
+            } else if (window.renderMathInElement) {
+                window.renderMathInElement(container, {
+                    delimiters: [
+                        {left: '\\(', right: '\\)', display: false},
+                        {left: '$', right: '$', display: false}
+                    ]
+                });
+            }
+        });
+    }
+    
+    // Watch for ANY changes
+    const observer = new MutationObserver((mutations) => {
+        mutations.forEach(mutation => {
+            mutation.addedNodes.forEach(node => {
+                if (node.nodeType === Node.ELEMENT_NODE) {
+                    // Check if this is a message or contains messages
+                    if (node.classList?.contains('message') || 
+                        node.querySelector?.('.message') ||
+                        node.textContent?.includes('$')) {
+                        
+                        setTimeout(() => {
+                            processLatexInElement(node);
+                        }, 100); // Small delay to let TypingMind finish its processing
+                    }
                 }
             });
         });
     });
-
-    // Start observing when DOM is ready
-    if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', () => {
-            observer.observe(document.body, {
-                childList: true,
-                subtree: true
-            });
+    
+    // Start observing immediately
+    observer.observe(document.body, {
+        childList: true,
+        subtree: true,
+        characterData: true
+    });
+    
+    // Also process existing content
+    setTimeout(() => {
+        document.querySelectorAll('.message, [class*="message"], [class*="content"]').forEach(el => {
+            processLatexInElement(el);
         });
-    } else {
-        observer.observe(document.body, {
-            childList: true,
-            subtree: true
-        });
-    }
-
-    console.log('Inline LaTeX renderer extension loaded');
+    }, 1000);
+    
+    // Log what math libraries are available
+    console.log('[LaTeX Extension] Available libraries:', {
+        katex: typeof window.katex !== 'undefined',
+        MathJax: typeof window.MathJax !== 'undefined',
+        renderMathInElement: typeof window.renderMathInElement !== 'undefined'
+    });
+    
+    console.log('[LaTeX Extension] Loaded successfully');
 })();
