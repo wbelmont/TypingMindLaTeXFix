@@ -1,17 +1,29 @@
-// inline-latex-renderer.js
 (function() {
-    var katexLoaded = false;
+    // Debounce utility bc we're not savages
+    const debounce = (fn, ms) => {
+        let timeoutId;
+        return (...args) => {
+            clearTimeout(timeoutId);
+            timeoutId = setTimeout(() => fn(...args), ms);
+        };
+    };
     
-    // Load KaTeX once
+    // Cache for processed text -> rendered HTML
+    const renderCache = new Map();
+    const MAX_CACHE = 500; // LRU-ish behavior
+    
+    let katexLoaded = false;
+    
+    // Lazy load KaTeX
     if (!window.katex) {
-        var link = document.createElement('link');
+        const link = document.createElement('link');
         link.rel = 'stylesheet';
         link.href = 'https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css';
         document.head.appendChild(link);
         
-        var script = document.createElement('script');
+        const script = document.createElement('script');
         script.src = 'https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js';
-        script.onload = function() {
+        script.onload = () => {
             katexLoaded = true;
             processVisible();
         };
@@ -21,80 +33,116 @@
     }
     
     function processElement(el) {
-        if (!katexLoaded || !el || el.getAttribute('data-latex-done')) return;
+        if (!katexLoaded || !el || el.dataset.latexDone) return;
         
-        var text = el.textContent;
-        if (!text || text.indexOf('$') === -1) return;
+        const text = el.textContent;
+        if (!text?.includes('$')) return;
         
-        var newHTML = '';
-        var lastEnd = 0;
-        var changed = false;
+        // Check cache first
+        if (renderCache.has(text)) {
+            el.innerHTML = renderCache.get(text);
+            el.dataset.latexDone = 'true';
+            return;
+        }
         
-        while (true) {
-            var start = text.indexOf('$', lastEnd);
-            if (start === -1) break;
-            
-            var end = text.indexOf('$', start + 1);
-            if (end === -1) break;
-            
+        // Use regex for SPEED - single pass instead of multiple indexOf
+        const pattern = /\$([^$]+)\$/g;
+        let match;
+        let lastIndex = 0;
+        let newHTML = '';
+        let changed = false;
+        
+        while ((match = pattern.exec(text)) !== null) {
             changed = true;
-            newHTML += text.substring(lastEnd, start);
-            
-            var math = text.substring(start + 1, end);
-            var span = document.createElement('span');
+            newHTML += text.substring(lastIndex, match.index);
             
             try {
-                katex.render(math, span, {throwOnError: false});
-                newHTML += span.innerHTML;
+                // Render inline to avoid DOM creation overhead
+                newHTML += katex.renderToString(match[1], {
+                    throwOnError: false,
+                    displayMode: false
+                });
             } catch (e) {
-                newHTML += '$' + math + '$';
+                newHTML += match[0]; // Keep original on error
             }
             
-            lastEnd = end + 1;
+            lastIndex = pattern.lastIndex;
         }
         
         if (changed) {
-            newHTML += text.substring(lastEnd);
+            newHTML += text.substring(lastIndex);
+            
+            // Cache management - crude LRU
+            if (renderCache.size > MAX_CACHE) {
+                const firstKey = renderCache.keys().next().value;
+                renderCache.delete(firstKey);
+            }
+            renderCache.set(text, newHTML);
+            
             el.innerHTML = newHTML;
-            el.setAttribute('data-latex-done', 'true');
+            el.dataset.latexDone = 'true';
         }
     }
     
-    function processVisible() {
-        if (!katexLoaded) return;
-        document.querySelectorAll('p:not([data-latex-done]), li:not([data-latex-done])').forEach(processElement);
-    }
-    
-    // Watch for new content with MutationObserver
-    var observer = new MutationObserver(function(mutations) {
-        var shouldProcess = false;
-        
-        mutations.forEach(function(mutation) {
-            if (mutation.type === 'childList') {
-                mutation.addedNodes.forEach(function(node) {
-                    if (node.nodeType === 1) { // Element node
-                        var text = node.textContent || '';
-                        if (text.includes('$') || node.tagName === 'P' || node.tagName === 'LI') {
-                            shouldProcess = true;
-                        }
-                    }
-                });
+    // Use IntersectionObserver for viewport-aware processing
+    const intersectionObserver = new IntersectionObserver((entries) => {
+        entries.forEach(entry => {
+            if (entry.isIntersecting) {
+                processElement(entry.target);
+                intersectionObserver.unobserve(entry.target);
             }
         });
-        
-        if (shouldProcess && katexLoaded) {
-            setTimeout(processVisible, 100); // Small delay to let DOM settle
-        }
-    });
+    }, { rootMargin: '100px' }); // Process slightly before visible
     
-    // Start observing
-    observer.observe(document.body, {
+    const processVisible = debounce(() => {
+        if (!katexLoaded) return;
+        
+        // Use more specific selector to reduce DOM traversal
+        const selector = 'p:not([data-latex-done]), li:not([data-latex-done])';
+        const elements = document.querySelectorAll(selector);
+        
+        // Only process elements in viewport first
+        elements.forEach(el => {
+            const rect = el.getBoundingClientRect();
+            if (rect.bottom >= 0 && rect.top <= window.innerHeight + 100) {
+                processElement(el);
+            } else {
+                // Observe off-screen elements
+                intersectionObserver.observe(el);
+            }
+        });
+    }, 50); // Debounced to prevent spam
+    
+    // Optimized mutation observer
+    const mutationObserver = new MutationObserver(debounce((mutations) => {
+        let needsProcessing = false;
+        
+        for (const mutation of mutations) {
+            if (mutation.type === 'childList') {
+                for (const node of mutation.addedNodes) {
+                    if (node.nodeType === 1 && node.textContent?.includes('$')) {
+                        needsProcessing = true;
+                        break;
+                    }
+                }
+            }
+            if (needsProcessing) break;
+        }
+        
+        if (needsProcessing && katexLoaded) {
+            processVisible();
+        }
+    }, 100));
+    
+    mutationObserver.observe(document.body, {
         childList: true,
         subtree: true
     });
     
-    // Initial process after a short delay
-    setTimeout(processVisible, 1000);
-    
-    return;
+    // Use requestIdleCallback for initial processing if available
+    if ('requestIdleCallback' in window) {
+        requestIdleCallback(() => processVisible());
+    } else {
+        setTimeout(processVisible, 100);
+    }
 })();
